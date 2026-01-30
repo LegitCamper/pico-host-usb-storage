@@ -40,21 +40,12 @@ embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs", branch =
 
 
 [patch.crates-io]
-# embassy-executor = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-rp = { git = "https://github.com/legitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-usb = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-usb-driver = { git = "https://github.com/Joeboy/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-futures = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-time = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-time-driver = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-embedded-hal = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-# embassy-sync = { git = "https://github.com/LegitCamper/embassy", rev = "d01dca5b9545a0d2d2e2ce1a0b7e08774d960215" }
-embassy-executor = { path = "../embassy/embassy-executor" }
-embassy-rp = { path = "../embassy/embassy-rp" }
-embassy-usb = { path = "../embassy/embassy-usb" }
-embassy-usb-driver = { path = "../embassy/embassy-usb-driver" }
-embassy-futures = { path = "../embassy/embassy-futures" }
-embassy-time = { path = "../embassy/embassy-time" }
-embassy-time-driver = { path = "../embassy/embassy-time-driver" }
-embassy-embedded-hal = { path = "../embassy/embassy-embedded-hal" }
-embassy-sync = { path = "../embassy/embassy-sync" }
+embassy-executor = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-rp = { git = "https://github.com/legitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-usb = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-usb-driver = { git = "https://github.com/legitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-futures = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-time = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-time-driver = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-embedded-hal = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
+embassy-sync = { git = "https://github.com/LegitCamper/embassy", rev = "905148510d0c04726cb64297b2570d78ab04806c" }
