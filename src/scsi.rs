@@ -68,7 +68,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc
             .bulk_out
-            .request_out(&out_buf, true)
+            .request_out(&out_buf, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 
@@ -100,7 +100,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc
             .bulk_out
-            .request_out(&buf, true)
+            .request_out(&buf, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 
@@ -120,7 +120,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc
             .bulk_out
-            .request_out(&buf, true)
+            .request_out(&buf, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 
@@ -162,7 +162,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc
             .bulk_out
-            .request_out(&buf, true)
+            .request_out(&buf, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 
@@ -196,13 +196,13 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc
             .bulk_out
-            .request_out(&buf, true)
+            .request_out(&buf, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 
         self.msc
             .bulk_out
-            .request_out(data, true)
+            .request_out(data, false)
             .await
             .map_err(|_| ScsiError::UsbError)?;
 

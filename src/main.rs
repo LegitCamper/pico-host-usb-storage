@@ -6,7 +6,7 @@ use crate::{msc::MscHandler, scsi::SdmmcScsi};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-use embassy_rp::clocks::ClockConfig;
+// use embassy_rp::clocks::ClockConfig;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::host::Driver;
 use embassy_time::{Instant, Timer};
@@ -50,7 +50,7 @@ async fn main(_spawner: Spawner) {
     let enum_info = usbhost.enumerate_root_bare(speed, 1).await.unwrap();
     let msc = MscHandler::try_register(&usbhost, &enum_info)
         .await
-        .expect("Couldn't mass storage device");
+        .expect("Couldn't register mass storage device");
 
     let mut scsi = ScsiHandler::new(msc);
     scsi.init().await.unwrap();
@@ -95,7 +95,7 @@ async fn test_read_speed<'a>(
     let file_size = file.length();
     info!("file size: {:?}", file_size);
 
-    let mut buffer = [0u8; 16 * BLOCK_SIZE];
+    let mut buffer = [0u8; 32 * BLOCK_SIZE];
 
     let start = Instant::now();
     let mut total_read = 0;
