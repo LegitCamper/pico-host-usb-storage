@@ -1,8 +1,7 @@
 use embassy_usb::handlers::{StaticHandlerSpec, UsbHostHandler};
-use embassy_usb::host::descriptor::{InterfaceDescriptor, USBDescriptor};
-use embassy_usb_driver::host::{UsbChannel, UsbHostDriver, channel};
+use embassy_usb::host::descriptor::InterfaceDescriptor;
+use embassy_usb_driver::host::{UsbHostDriver, channel};
 use embassy_usb_driver::{Direction, EndpointInfo, EndpointType};
-use scsi::BufferPushable;
 
 #[derive(Debug, defmt::Format)]
 pub enum MscEvent {}

@@ -1,18 +1,20 @@
 #![no_std]
 #![no_main]
 
-use crate::scsi::ScsiHandler;
+use crate::scsi::{BLOCK_SIZE, ScsiHandler};
 use crate::{msc::MscHandler, scsi::SdmmcScsi};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
+use embassy_rp::clocks::ClockConfig;
 use embassy_rp::peripherals::USB;
-use embassy_time::Timer;
+use embassy_rp::usb::host::Driver;
+use embassy_time::{Instant, Timer};
 use embassy_usb::handlers::UsbHostHandler;
 use embassy_usb::host::UsbHostBusExt;
 use embassy_usb_driver::host::DeviceEvent::Connected;
 use embassy_usb_driver::host::UsbHostDriver;
-use embedded_sdmmc::asynchronous::VolumeManager;
+use embedded_sdmmc::asynchronous::{Directory, Mode, VolumeManager};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -25,6 +27,10 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
+    // const OVERCLOCK: u32 = 125_000;
+    // let clocks = ClockConfig::system_freq(OVERCLOCK).unwrap();
+    // let config = embassy_rp::config::Config::new(clocks);
+    // let p = embassy_rp::init(config);
     let p = embassy_rp::init(Default::default());
 
     // Create the driver, from the HAL.
@@ -47,7 +53,7 @@ async fn main(_spawner: Spawner) {
         .expect("Couldn't mass storage device");
 
     let mut scsi = ScsiHandler::new(msc);
-    scsi.init().await;
+    scsi.init().await.unwrap();
 
     let sdmmc_scsi = SdmmcScsi::new(scsi);
 
@@ -57,29 +63,54 @@ async fn main(_spawner: Spawner) {
         5000,
     );
 
-    let mut volume0 = volume_mgr
+    let volume0 = volume_mgr
         .open_volume(embedded_sdmmc::asynchronous::VolumeIdx(0))
         .await
         .unwrap();
-    info!("Volume 0: {:?}", defmt::Debug2Format(&volume0));
 
     let mut root_dir = volume0.open_root_dir().unwrap();
 
-    let mut my_file = root_dir
-        .open_file_in_dir("MY_FILE.TXT", embedded_sdmmc::asynchronous::Mode::ReadOnly)
+    info!("Starting usb host scsi speed benchmark");
+    loop {
+        test_read_speed("STRESS.bin", &mut root_dir).await;
+        Timer::after_millis(500).await;
+    }
+}
+
+async fn test_read_speed<'a>(
+    file_name: &str,
+    root_dir: &mut Directory<
+        'a,
+        SdmmcScsi<Driver<'static, USB>>,
+        DummyTimesource,
+        MAX_DIRS,
+        MAX_FILES,
+        MAX_VOLUMES,
+    >,
+) {
+    let file = root_dir
+        .open_file_in_dir(file_name, Mode::ReadOnly)
         .await
         .unwrap();
+    let file_size = file.length();
+    info!("file size: {:?}", file_size);
 
-    while !my_file.is_eof() {
-        let mut buf = [0u8; 32];
-        if let Ok(n) = my_file.read(&mut buf).await {
-            info!("{:a}", buf[..n]);
-        }
+    let mut buffer = [0u8; 16 * BLOCK_SIZE];
+
+    let start = Instant::now();
+    let mut total_read = 0;
+
+    while !file.is_eof() {
+        let read_size = file.read(&mut buffer).await.expect("EOF");
+        total_read += read_size;
     }
 
-    loop {
-        Timer::after_secs(1).await
-    }
+    let duration = start.elapsed();
+    let duration_secs = duration.as_micros() as f32 / 1_000_000.0;
+    let speed_kbps = (total_read as f32 / 1024.0) / duration_secs;
+
+    info!("Read {} bytes in {}s", total_read, duration_secs);
+    info!("Average Speed: {} KB/s", speed_kbps);
 }
 
 pub const MAX_DIRS: usize = 4;

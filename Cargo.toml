@@ -3,6 +3,13 @@ name = "pico-host-usb-storage"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+debug = true
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [dependencies]
 embassy-executor = { version = "0.9", features = [
   "arch-cortex-m",

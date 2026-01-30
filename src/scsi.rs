@@ -1,7 +1,5 @@
-use core::cell::RefCell;
-
 use crate::msc::MscHandler;
-use defmt::info;
+use core::cell::RefCell;
 use embassy_usb_driver::host::{UsbChannel, UsbHostDriver};
 use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx};
 use scsi::scsi::commands::{
@@ -10,7 +8,7 @@ use scsi::scsi::commands::{
 };
 use scsi::{BufferPullable, BufferPushable};
 
-const BLOCK_SIZE: usize = Block::LEN;
+pub const BLOCK_SIZE: usize = Block::LEN;
 
 #[derive(Debug)]
 pub enum ScsiError {
@@ -34,15 +32,12 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         }
     }
 
-    pub async fn init(&mut self) {
-        let _inquiry = self.inquiry().await;
+    pub async fn init(&mut self) -> Result<(), ScsiError> {
+        let _inquiry = self.inquiry().await?;
+        let _ready = self.test_unit_ready().await?;
+        let _size = self.read_capacity_10().await?;
 
-        let _ready = self.test_unit_ready().await;
-
-        let size = self.read_capacity_10().await;
-
-        info!("block len: {:?}", size.block_length);
-        info!("num blocks: {:?}", size.logical_block_address);
+        Ok(())
     }
 
     async fn get_csw(&mut self) -> Result<CommandStatusWrapper, ScsiError> {
@@ -52,143 +47,166 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
             .request_in(&mut csw_buf)
             .await
             .map_err(|_| ScsiError::UsbError)?;
-        CommandStatusWrapper::pull_from_buffer(&csw_buf).map_err(|_| ScsiError::ParseError)
+        Ok(
+            CommandStatusWrapper::pull_from_buffer(&csw_buf)
+                .expect("Device returned malformed CSW"),
+        )
     }
 
-    async fn inquiry(&mut self) -> InquiryResponse {
+    async fn inquiry(&mut self) -> Result<InquiryResponse, ScsiError> {
         const INQUIRY_LEN: usize = 36;
 
         let mut out_buf = [0; 31];
 
         let cmd = InquiryCommand::new(INQUIRY_LEN as u8);
         let wrapper = cmd.wrapper();
-        wrapper.push_to_buffer(&mut out_buf).unwrap();
-        cmd.push_to_buffer(&mut out_buf).unwrap();
+        wrapper
+            .push_to_buffer(&mut out_buf)
+            .expect("CBW buffer must be at least 15 bytes");
+        cmd.push_to_buffer(&mut out_buf)
+            .expect("CDB buffer must be large enough for SCSI command");
 
-        self.msc.bulk_out.request_out(&out_buf, true).await.unwrap();
+        self.msc
+            .bulk_out
+            .request_out(&out_buf, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
         let mut inquiry = [0u8; INQUIRY_LEN];
-        self.msc.bulk_in.request_in(&mut inquiry).await.unwrap();
+        self.msc
+            .bulk_in
+            .request_in(&mut inquiry)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-        self.get_csw().await.unwrap();
+        self.get_csw().await?;
 
-        self.inquiry = InquiryResponse::pull_from_buffer(&inquiry).unwrap();
-        self.inquiry
+        self.inquiry = InquiryResponse::pull_from_buffer(&inquiry)
+            .expect("Device returned invalid Inquiry data");
+
+        Ok(self.inquiry)
     }
 
-    async fn test_unit_ready(&mut self) -> CommandStatusWrapper {
+    async fn test_unit_ready(&mut self) -> Result<CommandStatusWrapper, ScsiError> {
         let mut buf = [0u8; 31];
 
         let cmd = TestUnitReady::new();
         let wrapper = cmd.wrapper();
-        wrapper.push_to_buffer(&mut buf).unwrap();
-        cmd.push_to_buffer(&mut buf).unwrap();
+        wrapper
+            .push_to_buffer(&mut buf)
+            .expect("CBW buffer must be at least 15 bytes");
+        cmd.push_to_buffer(&mut buf)
+            .expect("CDB buffer must be large enough for SCSI command");
 
-        self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+        self.msc
+            .bulk_out
+            .request_out(&buf, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-        self.get_csw().await.unwrap()
+        self.get_csw().await
     }
 
-    async fn read_capacity_10(&mut self) -> ReadCapacityResponse {
+    async fn read_capacity_10(&mut self) -> Result<ReadCapacityResponse, ScsiError> {
         let mut buf = [0u8; 31];
 
         let cmd = ReadCapacityCommand::new();
         let wrapper = cmd.wrapper();
-        wrapper.push_to_buffer(&mut buf).unwrap();
-        cmd.push_to_buffer(&mut buf).unwrap();
+        wrapper
+            .push_to_buffer(&mut buf)
+            .expect("CBW buffer must be at least 15 bytes");
+        cmd.push_to_buffer(&mut buf)
+            .expect("CDB buffer must be large enough for SCSI command");
 
-        self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+        self.msc
+            .bulk_out
+            .request_out(&buf, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
         let mut data_buf = [0u8; 8];
-        self.msc.bulk_in.request_in(&mut data_buf).await.unwrap();
-        let capacity = ReadCapacityResponse::pull_from_buffer(&data_buf).unwrap();
+        self.msc
+            .bulk_in
+            .request_in(&mut data_buf)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
+
+        let capacity = ReadCapacityResponse::pull_from_buffer(&data_buf)
+            .expect("Device returned invalid Capacity data");
 
         assert!(capacity.block_length == BLOCK_SIZE as u32);
 
-        self.get_csw().await.unwrap();
+        self.get_csw().await?;
 
         self.size = capacity.logical_block_address;
-        capacity
+        Ok(capacity)
     }
 
     async fn read_10(
         &mut self,
         data: &mut [u8],
         block_address: u32,
-        transfer_blocks: u16,
-    ) -> CommandStatusWrapper {
-        let mut last_csw = None;
+        transfer_bytes: u32,
+    ) -> Result<CommandStatusWrapper, ScsiError> {
+        assert!(data.len() >= transfer_bytes as usize);
         let mut buf = [0u8; 31];
 
-        let total_bytes = BLOCK_SIZE * transfer_blocks as usize;
-        let mut offset = 0;
-        while offset < total_bytes {
-            // request single block
-            let cmd = Read10Command::new(
-                (block_address + (offset as u32 / BLOCK_SIZE as u32)) * BLOCK_SIZE as u32, // Byte offset
-                BLOCK_SIZE as u32,                                                         // bytes
-                BLOCK_SIZE as u32, // block size
-            )
-            .unwrap();
-            let wrapper = cmd.wrapper();
-            wrapper.push_to_buffer(&mut buf).unwrap();
-            cmd.push_to_buffer(&mut buf).unwrap();
+        let cmd = Read10Command::new(block_address, transfer_bytes, BLOCK_SIZE as u32)
+            .map_err(|_| ScsiError::ParseError)?;
+        let wrapper = cmd.wrapper();
+        wrapper
+            .push_to_buffer(&mut buf)
+            .expect("CBW buffer must be at least 15 bytes");
+        cmd.push_to_buffer(&mut buf)
+            .expect("CDB buffer must be large enough for SCSI command");
 
-            self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+        self.msc
+            .bulk_out
+            .request_out(&buf, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-            // read block
-            self.msc
-                .bulk_in
-                .request_in(&mut data[offset..offset + BLOCK_SIZE])
-                .await
-                .unwrap();
-            offset += BLOCK_SIZE;
+        self.msc
+            .bulk_in
+            .request_in(data)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-            last_csw = Some(self.get_csw().await.unwrap());
-        }
-
-        last_csw.expect("No blocks read")
+        self.get_csw().await
     }
 
     async fn write_10(
         &mut self,
         data: &[u8],
         block_address: u32,
-        transfer_blocks: u16,
-    ) -> CommandStatusWrapper {
-        let mut last_csw = None;
+        transfer_bytes: u32,
+    ) -> Result<CommandStatusWrapper, ScsiError> {
+        assert!(data.len() == transfer_bytes as usize);
         let mut buf = [0u8; 31];
 
-        let total_bytes = BLOCK_SIZE * transfer_blocks as usize;
-        let mut offset = 0;
+        let cmd = Write10Command::new(block_address, transfer_bytes, BLOCK_SIZE as u32)
+            .map_err(|_| ScsiError::ParseError)?;
 
-        while offset < total_bytes {
-            let cmd = Write10Command::new(
-                (block_address + (offset as u32 / BLOCK_SIZE as u32)) * BLOCK_SIZE as u32,
-                BLOCK_SIZE as u32, // bytes
-                BLOCK_SIZE as u32, // block size
-            )
-            .unwrap();
+        let wrapper = cmd.wrapper();
+        wrapper
+            .push_to_buffer(&mut buf)
+            .expect("CBW buffer must be at least 15 bytes");
+        cmd.push_to_buffer(&mut buf)
+            .expect("CDB buffer must be large enough for SCSI command");
 
-            let wrapper = cmd.wrapper();
-            wrapper.push_to_buffer(&mut buf).unwrap();
-            cmd.push_to_buffer(&mut buf).unwrap();
+        self.msc
+            .bulk_out
+            .request_out(&buf, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-            self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+        self.msc
+            .bulk_out
+            .request_out(data, true)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
 
-            self.msc
-                .bulk_out
-                .request_out(&data[offset..offset + BLOCK_SIZE], true)
-                .await
-                .unwrap();
-
-            offset += BLOCK_SIZE;
-
-            let csw = self.get_csw().await.unwrap();
-            last_csw = Some(csw);
-        }
-
-        last_csw.expect("No blocks written")
+        self.get_csw().await
     }
 }
 
@@ -203,35 +221,48 @@ impl<H: UsbHostDriver> SdmmcScsi<H> {
 }
 
 impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
-    type Error = ();
+    type Error = ScsiError;
 
     async fn read(
         &self,
         blocks: &mut [Block],
         start_block_idx: BlockIdx,
     ) -> Result<(), Self::Error> {
-        for (i, block) in blocks.iter_mut().enumerate() {
-            self.scsi
-                .borrow_mut()
-                .read_10(&mut block.contents, start_block_idx.0 + i as u32, 1)
-                .await;
-        }
+        let num_blocks = blocks.len();
 
+        // SAFETY:
+        // This is safe because Block is a transparent wrapper around [u8; 512]
+        // and slices are guaranteed to be contiguous.
+        let data_ptr = blocks.as_mut_ptr() as *mut u8;
+        let data_slice =
+            unsafe { core::slice::from_raw_parts_mut(data_ptr, num_blocks * BLOCK_SIZE) };
+
+        let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
+        let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
+
+        self.scsi
+            .borrow_mut()
+            .read_10(data_slice, byte_offset, total_bytes)
+            .await?;
         Ok(())
     }
 
     async fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
-        for (i, block) in blocks.iter().enumerate() {
-            self.scsi
-                .borrow_mut()
-                .write_10(
-                    &block.contents,
-                    start_block_idx.0 + i as u32,
-                    block.contents.len() as u16,
-                )
-                .await;
-        }
+        let num_blocks = blocks.len();
 
+        // SAFETY:
+        // This is safe because Block is a transparent wrapper around [u8; 512]
+        // and slices are guaranteed to be contiguous.
+        let data_ptr = blocks.as_ptr() as *const u8;
+        let data_slice = unsafe { core::slice::from_raw_parts(data_ptr, num_blocks * BLOCK_SIZE) };
+
+        let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
+        let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
+
+        self.scsi
+            .borrow_mut()
+            .write_10(data_slice, byte_offset, total_bytes)
+            .await?;
         Ok(())
     }
 
