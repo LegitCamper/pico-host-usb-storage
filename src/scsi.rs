@@ -10,6 +10,8 @@ use scsi::scsi::commands::{
 };
 use scsi::{BufferPullable, BufferPushable};
 
+const BLOCK_SIZE: usize = Block::LEN;
+
 #[derive(Debug)]
 pub enum ScsiError {
     ParseError,
@@ -21,9 +23,6 @@ pub struct ScsiHandler<H: UsbHostDriver> {
     inquiry: InquiryResponse,
     size: u32,
 }
-
-const BULK_ENDPOINT_PACKET_SIZE: usize = 64;
-const BLOCK_SIZE: usize = Block::LEN;
 
 impl<H: UsbHostDriver> ScsiHandler<H> {
     pub fn new(msc_handler: MscHandler<H>) -> Self {
@@ -151,29 +150,45 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         last_csw.expect("No blocks read")
     }
 
-    async fn write_10(&mut self, data: &[u8], offset: u32, transfer_bytes: u32) {
+    async fn write_10(
+        &mut self,
+        data: &[u8],
+        block_address: u32,
+        transfer_blocks: u16,
+    ) -> CommandStatusWrapper {
+        let mut last_csw = None;
         let mut buf = [0u8; 31];
 
-        let cmd = Write10Command::new(offset, transfer_bytes, 512).unwrap();
-        let wrapper = cmd.wrapper();
-        wrapper.push_to_buffer(&mut buf).unwrap();
-        cmd.push_to_buffer(&mut buf).unwrap();
-
-        self.msc.bulk_out.request_out(&buf, true).await.unwrap();
-
+        let total_bytes = BLOCK_SIZE * transfer_blocks as usize;
         let mut offset = 0;
-        while offset < transfer_bytes {
-            let chunk_size =
-                core::cmp::min(transfer_bytes - offset, BULK_ENDPOINT_PACKET_SIZE as u32);
+
+        while offset < total_bytes {
+            let cmd = Write10Command::new(
+                (block_address + (offset as u32 / BLOCK_SIZE as u32)) * BLOCK_SIZE as u32,
+                BLOCK_SIZE as u32, // bytes
+                BLOCK_SIZE as u32, // block size
+            )
+            .unwrap();
+
+            let wrapper = cmd.wrapper();
+            wrapper.push_to_buffer(&mut buf).unwrap();
+            cmd.push_to_buffer(&mut buf).unwrap();
+
+            self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+
             self.msc
                 .bulk_out
-                .request_out(&data[offset as usize..(offset + chunk_size) as usize], true)
+                .request_out(&data[offset..offset + BLOCK_SIZE], true)
                 .await
                 .unwrap();
-            offset += chunk_size;
+
+            offset += BLOCK_SIZE;
+
+            let csw = self.get_csw().await.unwrap();
+            last_csw = Some(csw);
         }
 
-        self.get_csw().await.unwrap();
+        last_csw.expect("No blocks written")
     }
 }
 
@@ -212,7 +227,7 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
                 .write_10(
                     &block.contents,
                     start_block_idx.0 + i as u32,
-                    block.contents.len() as u32,
+                    block.contents.len() as u16,
                 )
                 .await;
         }
