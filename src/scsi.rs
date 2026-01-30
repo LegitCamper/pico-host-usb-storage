@@ -10,6 +10,12 @@ use scsi::scsi::commands::{
 };
 use scsi::{BufferPullable, BufferPushable};
 
+#[derive(Debug)]
+pub enum ScsiError {
+    ParseError,
+    UsbError,
+}
+
 pub struct ScsiHandler<H: UsbHostDriver> {
     msc: MscHandler<H>,
     inquiry: InquiryResponse,
@@ -40,6 +46,16 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         info!("num blocks: {:?}", size.logical_block_address);
     }
 
+    async fn get_csw(&mut self) -> Result<CommandStatusWrapper, ScsiError> {
+        let mut csw_buf = [0u8; 13];
+        self.msc
+            .bulk_in
+            .request_in(&mut csw_buf)
+            .await
+            .map_err(|_| ScsiError::UsbError)?;
+        CommandStatusWrapper::pull_from_buffer(&csw_buf).map_err(|_| ScsiError::ParseError)
+    }
+
     async fn inquiry(&mut self) -> InquiryResponse {
         const INQUIRY_LEN: usize = 36;
 
@@ -55,8 +71,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         let mut inquiry = [0u8; INQUIRY_LEN];
         self.msc.bulk_in.request_in(&mut inquiry).await.unwrap();
 
-        let mut csw = [0u8; 13];
-        self.msc.bulk_in.request_in(&mut csw).await.unwrap();
+        self.get_csw().await.unwrap();
 
         self.inquiry = InquiryResponse::pull_from_buffer(&inquiry).unwrap();
         self.inquiry
@@ -72,10 +87,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc.bulk_out.request_out(&buf, true).await.unwrap();
 
-        let mut csw_buf = [0u8; 13];
-        self.msc.bulk_in.request_in(&mut csw_buf).await.unwrap();
-
-        CommandStatusWrapper::pull_from_buffer(&csw_buf).unwrap()
+        self.get_csw().await.unwrap()
     }
 
     async fn read_capacity_10(&mut self) -> ReadCapacityResponse {
@@ -88,12 +100,13 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
 
         self.msc.bulk_out.request_out(&buf, true).await.unwrap();
 
-        let mut csw_buf = [0u8; 13];
-        self.msc.bulk_in.request_in(&mut csw_buf).await.unwrap();
-
-        let capacity = ReadCapacityResponse::pull_from_buffer(&csw_buf).unwrap();
+        let mut data_buf = [0u8; 8];
+        self.msc.bulk_in.request_in(&mut data_buf).await.unwrap();
+        let capacity = ReadCapacityResponse::pull_from_buffer(&data_buf).unwrap();
 
         assert!(capacity.block_length == BLOCK_SIZE as u32);
+
+        self.get_csw().await.unwrap();
 
         self.size = capacity.logical_block_address;
         capacity
@@ -105,31 +118,37 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         block_address: u32,
         transfer_blocks: u16,
     ) -> CommandStatusWrapper {
+        let mut last_csw = None;
         let mut buf = [0u8; 31];
-
-        let cmd =
-            Read10Command::new(block_address, BLOCK_SIZE as u32, transfer_blocks.into()).unwrap();
-        let wrapper = cmd.wrapper();
-        wrapper.push_to_buffer(&mut buf).unwrap();
-        cmd.push_to_buffer(&mut buf).unwrap();
-
-        self.msc.bulk_out.request_out(&buf, true).await.unwrap();
 
         let total_bytes = BLOCK_SIZE * transfer_blocks as usize;
         let mut offset = 0;
         while offset < total_bytes {
-            let chunk_size = core::cmp::min(total_bytes - offset, BULK_ENDPOINT_PACKET_SIZE);
+            // request single block
+            let cmd = Read10Command::new(
+                (block_address + (offset as u32 / BLOCK_SIZE as u32)) * BLOCK_SIZE as u32, // Byte offset
+                BLOCK_SIZE as u32,                                                         // bytes
+                BLOCK_SIZE as u32, // block size
+            )
+            .unwrap();
+            let wrapper = cmd.wrapper();
+            wrapper.push_to_buffer(&mut buf).unwrap();
+            cmd.push_to_buffer(&mut buf).unwrap();
+
+            self.msc.bulk_out.request_out(&buf, true).await.unwrap();
+
+            // read block
             self.msc
                 .bulk_in
-                .request_in(&mut data[offset..offset + chunk_size])
+                .request_in(&mut data[offset..offset + BLOCK_SIZE])
                 .await
                 .unwrap();
-            offset += chunk_size;
+            offset += BLOCK_SIZE;
+
+            last_csw = Some(self.get_csw().await.unwrap());
         }
 
-        let mut csw_buf = [0u8; 13];
-        self.msc.bulk_in.request_in(&mut csw_buf).await.unwrap();
-        CommandStatusWrapper::pull_from_buffer(&csw_buf).unwrap()
+        last_csw.expect("No blocks read")
     }
 
     async fn write_10(&mut self, data: &[u8], offset: u32, transfer_bytes: u32) {
@@ -154,9 +173,7 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
             offset += chunk_size;
         }
 
-        let mut csw_buf = [0u8; 13];
-        self.msc.bulk_in.request_in(&mut csw_buf).await.unwrap();
-        CommandStatusWrapper::pull_from_buffer(&csw_buf).unwrap();
+        self.get_csw().await.unwrap();
     }
 }
 
