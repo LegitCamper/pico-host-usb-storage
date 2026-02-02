@@ -15,6 +15,7 @@ use embassy_usb::host::UsbHostBusExt;
 use embassy_usb_driver::host::DeviceEvent::Connected;
 use embassy_usb_driver::host::UsbHostDriver;
 use embedded_sdmmc::asynchronous::{Directory, Mode, VolumeManager};
+use scsi::CacheWrapper;
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -55,7 +56,7 @@ async fn main(_spawner: Spawner) {
     let mut scsi = ScsiHandler::new(msc);
     scsi.init().await.unwrap();
 
-    let sdmmc_scsi = SdmmcScsi::new(scsi);
+    let sdmmc_scsi = SdmmcScsi::new(CacheWrapper::new(scsi));
 
     let volume_mgr = VolumeManager::<_, _, MAX_DIRS, MAX_FILES, MAX_VOLUMES>::new_with_limits(
         sdmmc_scsi,
@@ -72,7 +73,7 @@ async fn main(_spawner: Spawner) {
 
     info!("Starting usb host scsi speed benchmark");
     loop {
-        test_read_speed("STRESS.bin", &mut root_dir).await;
+        test_read_speed("TEST.BIN", &mut root_dir).await;
         Timer::after_millis(500).await;
     }
 }

@@ -210,13 +210,73 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
     }
 }
 
+const RAC_BLOCKS: usize = 32;
+
+// read only read ahead cache
+pub struct ReadAheadCache {
+    // last block requested
+    last_block: Option<u32>,
+    // first block in cache
+    start_block: Option<u32>,
+    // read ahead cache
+    cache: [u8; RAC_BLOCKS * BLOCK_SIZE],
+}
+
+pub struct CacheWrapper<H: UsbHostDriver> {
+    scsi: ScsiHandler<H>,
+    rac: ReadAheadCache,
+}
+
+impl<H: UsbHostDriver> CacheWrapper<H> {
+    pub fn new(scsi: ScsiHandler<H>) -> Self {
+        Self {
+            scsi,
+            rac: ReadAheadCache {
+                last_block: None,
+                start_block: None,
+                cache: [0; RAC_BLOCKS * BLOCK_SIZE],
+            },
+        }
+    }
+
+    pub async fn read_10(
+        &mut self,
+        data: &mut [u8],
+        block_address: u32,
+        transfer_bytes: u32,
+    ) -> Result<(), ScsiError> {
+        self.rac.start_block = None;
+
+        self.scsi
+            .read_10(data, block_address, transfer_bytes)
+            .await
+            .map(|_| ())
+    }
+
+    async fn write_10(
+        &mut self,
+        data: &[u8],
+        block_address: u32,
+        transfer_bytes: u32,
+    ) -> Result<(), ScsiError> {
+        self.rac.start_block = None;
+
+        self.scsi
+            .write_10(data, block_address, transfer_bytes)
+            .await
+            .map(|_| ())
+    }
+}
+
 pub struct SdmmcScsi<H: UsbHostDriver> {
-    scsi: RefCell<ScsiHandler<H>>,
+    cache: RefCell<CacheWrapper<H>>,
 }
 
 impl<H: UsbHostDriver> SdmmcScsi<H> {
-    pub fn new(scsi: ScsiHandler<H>) -> Self {
-        Self { scsi: scsi.into() }
+    pub fn new(cache: CacheWrapper<H>) -> Self {
+        Self {
+            cache: cache.into(),
+        }
     }
 }
 
@@ -240,7 +300,7 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
         let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
         let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
 
-        self.scsi
+        self.cache
             .borrow_mut()
             .read_10(data_slice, byte_offset, total_bytes)
             .await?;
@@ -259,7 +319,7 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
         let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
         let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
 
-        self.scsi
+        self.cache
             .borrow_mut()
             .write_10(data_slice, byte_offset, total_bytes)
             .await?;
@@ -267,6 +327,6 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
     }
 
     async fn num_blocks(&self) -> Result<BlockCount, Self::Error> {
-        Ok(BlockCount(self.scsi.borrow().size))
+        Ok(BlockCount(self.cache.borrow().scsi.size))
     }
 }
