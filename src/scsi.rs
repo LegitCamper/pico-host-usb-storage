@@ -12,7 +12,6 @@ pub const BLOCK_SIZE: usize = Block::LEN;
 
 #[derive(Debug)]
 pub enum ScsiError {
-    ParseError,
     UsbError,
 }
 
@@ -146,13 +145,16 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         &mut self,
         data: &mut [u8],
         block_address: u32,
-        transfer_bytes: u32,
+        blocks: u16,
     ) -> Result<CommandStatusWrapper, ScsiError> {
-        assert!(data.len() >= transfer_bytes as usize);
+        assert!(data.len() >= blocks as usize);
         let mut buf = [0u8; 31];
 
-        let cmd = Read10Command::new(block_address, transfer_bytes, BLOCK_SIZE as u32)
-            .map_err(|_| ScsiError::ParseError)?;
+        let cmd = Read10Command {
+            block_address,
+            block_size: BLOCK_SIZE as u32,
+            transfer_blocks: blocks,
+        };
         let wrapper = cmd.wrapper();
         wrapper
             .push_to_buffer(&mut buf)
@@ -179,13 +181,16 @@ impl<H: UsbHostDriver> ScsiHandler<H> {
         &mut self,
         data: &[u8],
         block_address: u32,
-        transfer_bytes: u32,
+        blocks: u16,
     ) -> Result<CommandStatusWrapper, ScsiError> {
-        assert!(data.len() == transfer_bytes as usize);
+        assert!(data.len() == blocks as usize);
         let mut buf = [0u8; 31];
 
-        let cmd = Write10Command::new(block_address, transfer_bytes, BLOCK_SIZE as u32)
-            .map_err(|_| ScsiError::ParseError)?;
+        let cmd = Write10Command {
+            block_address,
+            block_size: BLOCK_SIZE as u32,
+            transfer_blocks: blocks,
+        };
 
         let wrapper = cmd.wrapper();
         wrapper
@@ -237,12 +242,9 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
         let data_slice =
             unsafe { core::slice::from_raw_parts_mut(data_ptr, num_blocks * BLOCK_SIZE) };
 
-        let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
-        let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
-
         self.scsi
             .borrow_mut()
-            .read_10(data_slice, byte_offset, total_bytes)
+            .read_10(data_slice, start_block_idx.0, num_blocks as u16)
             .await?;
         Ok(())
     }
@@ -256,12 +258,9 @@ impl<H: UsbHostDriver> BlockDevice for SdmmcScsi<H> {
         let data_ptr = blocks.as_ptr() as *const u8;
         let data_slice = unsafe { core::slice::from_raw_parts(data_ptr, num_blocks * BLOCK_SIZE) };
 
-        let byte_offset = start_block_idx.0 * BLOCK_SIZE as u32;
-        let total_bytes = (num_blocks * BLOCK_SIZE) as u32;
-
         self.scsi
             .borrow_mut()
-            .write_10(data_slice, byte_offset, total_bytes)
+            .write_10(data_slice, start_block_idx.0, num_blocks as u16)
             .await?;
         Ok(())
     }

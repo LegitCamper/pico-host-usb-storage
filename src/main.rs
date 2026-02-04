@@ -72,7 +72,7 @@ async fn main(_spawner: Spawner) {
 
     info!("Starting usb host scsi speed benchmark");
     loop {
-        test_read_speed("STRESS.bin", &mut root_dir).await;
+        test_read_speed("TEST.BIN", &mut root_dir).await;
         Timer::after_millis(500).await;
     }
 }
