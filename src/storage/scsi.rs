@@ -1,4 +1,4 @@
-use crate::msc::MscHandler;
+use super::msc::MscHandler;
 use core::cell::RefCell;
 use embassy_usb_driver::host::{UsbChannel, UsbHostDriver};
 use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx};

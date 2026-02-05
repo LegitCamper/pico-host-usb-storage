@@ -1,25 +1,22 @@
 #![no_std]
 #![no_main]
 
-use crate::scsi::{BLOCK_SIZE, ScsiHandler};
-use crate::{msc::MscHandler, scsi::SdmmcScsi};
+mod storage;
+
+use crate::storage::{
+    msc::MscHandler,
+    scsi::{BLOCK_SIZE, ScsiHandler, SdmmcScsi},
+};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-// use embassy_rp::clocks::ClockConfig;
-use embassy_rp::peripherals::USB;
-use embassy_rp::usb::host::Driver;
+use embassy_rp::{peripherals::USB, usb::host::Driver};
 use embassy_time::{Instant, Timer};
-use embassy_usb::handlers::UsbHostHandler;
-use embassy_usb::host::UsbHostBusExt;
-use embassy_usb_driver::host::DeviceEvent::Connected;
-use embassy_usb_driver::host::UsbHostDriver;
+use embassy_usb::{handlers::UsbHostHandler, host::UsbHostBusExt};
+use embassy_usb_driver::host::{DeviceEvent::Connected, UsbHostDriver};
 use embedded_sdmmc::asynchronous::{Directory, Mode, VolumeManager};
 
 use {defmt_rtt as _, panic_probe as _};
-
-mod msc;
-mod scsi;
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => embassy_rp::usb::host::InterruptHandler<USB>;
@@ -27,13 +24,8 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    // const OVERCLOCK: u32 = 125_000;
-    // let clocks = ClockConfig::system_freq(OVERCLOCK).unwrap();
-    // let config = embassy_rp::config::Config::new(clocks);
-    // let p = embassy_rp::init(config);
     let p = embassy_rp::init(Default::default());
 
-    // Create the driver, from the HAL.
     let mut usbhost = embassy_rp::usb::host::Driver::new(p.USB, Irqs);
 
     debug!("Detecting device");
